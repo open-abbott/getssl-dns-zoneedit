@@ -411,6 +411,9 @@ const [ cmd, domain, txtValue ] = process.argv.slice(2)
 state.domain = domain
 state.txtValue = txtValue
 
+console.log(`Working with domain: ${state.domain}`)
+console.log(`TXT record value: ${state.txtValue}`)
+
 const client = new HttpClient()
 login(client, (err, client) => {
     if (err) {
