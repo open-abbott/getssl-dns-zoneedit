@@ -1,0 +1,26 @@
+{
+  "name": "getssl-dns-zoneedit",
+  "version": "0.0.1",
+  "description": "ZoneEdit DNS helper for getssl",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-abbott/getssl-dns-zoneedit.git"
+  },
+  "author": "dave@daveabbott.com",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/open-abbott/getssl-dns-zoneedit/issues"
+  },
+  "homepage": "https://github.com/open-abbott/getssl-dns-zoneedit#readme",
+  "dependencies": {
+    "extend": "3.0.2",
+    "md5": "2.3.0",
+    "node-html-parser": "5.2.0",
+    "tough-cookie": "4.0.0"
+  },
+  "type": "module"
+}
