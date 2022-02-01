@@ -113,7 +113,7 @@ function getLoginForm(client, callback) {
         response.on('data', d => {
             body += d.toString()
         })
-    
+
         response.on('end', () => {
             const form = {}
             const document = parseHtml(body)
@@ -127,7 +127,7 @@ function getLoginForm(client, callback) {
             callback(null, form)
         })
     })
-    
+
     r.on('error', err => callback(err))
     r.end()
 
@@ -408,7 +408,7 @@ function delRecordsTxt(client, form, callback) {
 }
 
 const [ cmd, domain, txtValue ] = process.argv.slice(2)
-state.domain = domain
+state.domain = domain.split('.').slice(-2).join('.')
 state.txtValue = txtValue
 
 console.log(`Working with domain: ${state.domain}`)
@@ -443,5 +443,5 @@ login(client, (err, client) => {
             }
         })
     })
-    
+
 })
