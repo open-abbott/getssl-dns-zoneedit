@@ -11,7 +11,7 @@ const state = {
     domain: '', // defined later
     user: process.env.ZONEEDIT_USER,
     pass: process.env.ZONEEDIT_PASS,
-    txtHost: '_acme-challenge',
+    txtHost: '', // defined later
     txtValue: '' // defined later
 }
 
@@ -183,7 +183,7 @@ function loginToDomain(client, callback) {
     const r = client.request({
         method: HttpMethod.GET,
         host: 'cp.zoneedit.com',
-        path: `/manage/domains/?LOGIN=${state.domain}`
+        path: `/manage/domains/?LOGIN=${state.baseDomain}`
     }, response => {
         let body = ""
 
@@ -408,7 +408,13 @@ function delRecordsTxt(client, form, callback) {
 }
 
 const [ cmd, domain, txtValue ] = process.argv.slice(2)
-state.domain = domain.split('.').slice(-2).join('.')
+
+const domainArray = domain.split('.')
+state.domain = domain
+state.baseDomain = domainArray.slice(-2).join('.')
+
+domainArray.unshift('_acme-challenge')
+state.txtHost = domainArray.slice(0, domainArray.length - 2).join('.')
 state.txtValue = txtValue
 
 console.log(`Working with domain: ${state.domain}`)
