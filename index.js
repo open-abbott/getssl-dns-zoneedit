@@ -237,7 +237,7 @@ function interrogateRecordsTxt(client, callback) {
     r.end()
 }
 
-function recordsFromForm(form) {
+function extractRecordsFromForm(form) {
     const records = []
     Object.keys(form)
         .filter(k => k.match('^TXT::'))
@@ -247,12 +247,16 @@ function recordsFromForm(form) {
                 records[a[1]] = {}
             }
             records[a[1]][a[2]] = form[k]
+            delete form[k]
         })
     return records
 }
 
 function addTxtRecord(form) {
-    const records = recordsFromForm(form)
+    const records = extractRecordsFromForm(form)
+
+    console.log("addTxtRecord: starting form")
+    console.log(form)
 
     const existingRecord = records.find(r => r.host === state.txtHost)
     if (existingRecord) {
@@ -267,48 +271,35 @@ function addTxtRecord(form) {
     }
 
     records.forEach((r, i) => {
-        if ('object' === typeof r) {
-            // this field seems unnecessary for create
-            delete r.del
-            Object.keys(r).forEach(k => {
-                form[`TXT::${i}::${k}`] = r[k]
-            })
-        }
+        // this field is unnecessary for create
+        delete r.del
+        Object.keys(r).forEach(k => {
+            form[`TXT::${i}::${k}`] = r[k]
+        })
     })
 
     // ???
     form.next = ''
 
+    console.log("addTxtRecord: ending form")
+    console.log(form)
+
     return form
 }
 
 function delTxtRecord(form) {
-    const records = recordsFromForm(form)
-
-    const existingRecord = records.find(r => r.host === state.txtHost)
-    if (existingRecord) {
-        existingRecord.txt = state.txtValue
-    }
-    else {
-        records.push({
-            host: state.txtHost,
-            txt: state.txtValue,
-            ttl: ''
-        })
-    }
+    const records = extractRecordsFromForm(form)
 
     records.forEach((r, i) => {
-        if ('object' === typeof r) {
-            if (state.txtHost === r.host) {
-                r.del = 1
-            }
-            else {
-                delete r.del
-            }
-            Object.keys(r).forEach(k => {
-                form[`TXT::${i}::${k}`] = r[k]
-            })
+        if (state.txtHost === r.host) {
+            r.del = 1
         }
+        else {
+            delete r.del
+        }
+        Object.keys(r).forEach(k => {
+            form[`TXT::${i}::${k}`] = r[k]
+        })
     })
 
     // ???
