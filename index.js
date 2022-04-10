@@ -6,6 +6,7 @@ import https from 'https'
 import md5 from 'md5'
 import { parse as parseHtml } from 'node-html-parser'
 import { Cookie, CookieJar, MemoryCookieStore } from 'tough-cookie'
+import { promisify } from 'util'
 
 const state = {
     domain: '', // defined later
@@ -115,6 +116,9 @@ function getLoginForm(client, callback) {
         })
 
         response.on('end', () => {
+            if (200 !== response.statusCode) {
+                return callback(new Error('Failed to get login form'))
+            }
             const form = {}
             const document = parseHtml(body)
             const formElements = [ 'login_chal', 'csrf_token' ]
@@ -147,6 +151,9 @@ function performLogin(client, form, callback) {
             [HttpHeader.ContentType]: ContentType.WwwForm
         }
     }, response => {
+        if (302 !== response.statusCode) {
+            return callback(new Error('Login did not redirect'))
+        }
         let body = ""
 
         response.on('data', d => {
@@ -166,16 +173,21 @@ function performLogin(client, form, callback) {
 function login(client, callback) {
     getLoginForm(client, (err, form) => {
         if (err) {
-            callback(err)
+            return callback(new Error('Failed getting login form', { cause: err }))
         }
-        form.login_user = state.user
-        form.login_pass = state.pass
-        form.login_hash = md5([
-            form.login_user,
-            md5(form.login_pass),
-            form.login_chal
-        ].join(""))
-        performLogin(client, form, callback)
+        try {
+            form.login_user = state.user
+            form.login_pass = state.pass
+            form.login_hash = md5([
+                form.login_user,
+                md5(form.login_pass),
+                form.login_chal
+            ].join(""))
+            performLogin(client, form, callback)
+        }
+        catch (error) {
+            callback(new Error('Failed handling login form', { cause: error }))
+        }
     })
 }
 
@@ -215,6 +227,7 @@ function interrogateRecordsTxt(client, callback) {
         response.on('end', () => {
             if (200 !== response.statusCode) {
                 console.log(response.headers)
+                return callback(new Error('Failed to retrieve TXT records'))
             }
 
             const document = parseHtml(body)
@@ -255,7 +268,7 @@ function extractRecordsFromForm(form) {
 function addTxtRecord(form) {
     const records = extractRecordsFromForm(form)
 
-    console.log("addTxtRecord: starting form")
+    console.log('addTxtRecord: starting form')
     console.log(form)
 
     const existingRecord = records.find(r => r.host === state.txtHost)
@@ -281,7 +294,7 @@ function addTxtRecord(form) {
     // ???
     form.next = ''
 
-    console.log("addTxtRecord: ending form")
+    console.log('addTxtRecord: ending form')
     console.log(form)
 
     return form
@@ -332,6 +345,7 @@ function confirmRecordsTxt(client, form, callback) {
             if (200 !== response.statusCode) {
                 console.log(response.headers)
                 console.log(body)
+                return callback(new Error('Failed to confirm TXT records'))
             }
 
             callback(null, client)
@@ -366,6 +380,9 @@ function updateRecordsTxt(client, form, transform, callback) {
         })
 
         response.on('end', () => {
+            if (200 !== response.statusCode) {
+                return callback(new Error('Failed to update TXT records'))
+            }
             const document = parseHtml(body)
             const form = document
                 .querySelectorAll('input')
@@ -400,45 +417,62 @@ function delRecordsTxt(client, form, callback) {
 
 const [ cmd, domain, txtValue ] = process.argv.slice(2)
 
-const domainArray = domain.split('.')
-state.domain = domain
-state.baseDomain = domainArray.slice(-2).join('.')
+if (!['add', 'del'].find(c => c === cmd)) {
+    console.error(`Command not available: ${cmd}`)
+    process.exit(-1)
+}
 
-domainArray.unshift('_acme-challenge')
-state.txtHost = domainArray.slice(0, domainArray.length - 2).join('.')
-state.txtValue = txtValue
+try {
+    const domainArray = domain.split('.')
+    state.domain = domain
+    state.baseDomain = domainArray.slice(-2).join('.')
+
+    domainArray.unshift('_acme-challenge')
+    state.txtHost = domainArray.slice(0, domainArray.length - 2).join('.')
+    state.txtValue = txtValue
+}
+catch (error) {
+    console.error(`Unable to parse domain argument: ${domain}`)
+    console.error(error)
+    process.exit(-1)
+}
+
+if ('add' === cmd && ('string' !== typeof txtValue || 0 === txtValue.length)) {
+    console.error('Invalid value specified for TXT record value')
+    process.exit(-1)
+}
+
+if (undefined === state.user) {
+    console.error('No value specified for ZONEEDIT_USER environment variable')
+    process.exit(-1)
+}
+if (undefined === state.pass) {
+    console.error('No value specified for ZONEEDIT_PASS environment variable')
+    process.exit(-1)
+}
 
 console.log(`Working with domain: ${state.domain}`)
 console.log(`TXT record value: ${state.txtValue}`)
 
 const client = new HttpClient()
-login(client, (err, client) => {
-    if (err) {
-        throw err
-    }
-    loginToDomain(client, (err, client) => {
-        if (err) {
-            throw err
-        }
-        interrogateRecordsTxt(client, (err, form) => {
-            if (err) {
-                throw err
-            }
-            if ('add' === cmd) {
-                addRecordsTxt(client, form, (err) => {
-                    if (err) {
-                        throw err
-                    }
-                })
-            }
-            else if ('del' === cmd) {
-                delRecordsTxt(client, form, (err) => {
-                    if (err) {
-                        throw err
-                    }
-                })
-            }
-        })
+promisify(login)(client)
+    .then(_ => {
+        return promisify(loginToDomain)(client)
     })
-
-})
+    .then(_ => {
+        return promisify(interrogateRecordsTxt)(client)
+    })
+    .then(form => {
+        switch (cmd) {
+            case 'add':
+                return promisify(addRecordsTxt)(client, form)
+            case 'del':
+                return promisify(delRecordsTxt)(client, form)
+            default:
+                throw new Error(`Unknown command: ${cmd}`)
+        }
+    })
+    .catch(error => {
+        console.error(error)
+        process.exit(-1)
+    })
