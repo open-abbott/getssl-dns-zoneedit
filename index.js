@@ -2,6 +2,7 @@
 'use strict'
 
 import extend from 'extend'
+import { close, open, readFile, stat, writeFile } from 'node:fs'
 import https from 'https'
 import md5 from 'md5'
 import { parse as parseHtml } from 'node-html-parser'
@@ -12,6 +13,7 @@ const state = {
     domain: '', // defined later
     user: process.env.ZONEEDIT_USER,
     pass: process.env.ZONEEDIT_PASS,
+    token: process.env.ZONEEDIT_TOKEN,
     txtHost: '', // defined later
     txtValue: '' // defined later
 }
@@ -55,10 +57,16 @@ const ContentType = {
     Wildcard: '*/*'
 }
 
+function objectToFormPayload(obj) {
+    return Object.keys(obj).map(k => {
+        return `${encodeURIComponent(k)}=${encodeURIComponent(obj[k])}`
+    }).join('&')
+}
+
 class HttpClient {
     constructor() {
-        const store = new MemoryCookieStore()
-        this.cookieJar = new CookieJar(store, {
+        this.store = new MemoryCookieStore()
+        this.cookieJar = new CookieJar(this.store, {
             looseMode: true
         })
     }
@@ -72,6 +80,9 @@ class HttpClient {
     }
     cookiesToJson() {
         return this.cookieJar.serializeSync()
+    }
+    cookiesFromJson(json) {
+        return this.cookieJar = CookieJar.deserializeSync(json, this.store)
     }
     request(options, callback) {
         const url = `https://${options.host}${options.path}`
@@ -103,7 +114,6 @@ class HttpClient {
 }
 
 function getLoginForm(client, callback) {
-
     const r = client.request({
         method: HttpMethod.GET,
         host: 'cp.zoneedit.com',
@@ -134,13 +144,10 @@ function getLoginForm(client, callback) {
 
     r.on('error', err => callback(err))
     r.end()
-
 }
 
 function performLogin(client, form, callback) {
-    const payload = Object.keys(form).map(k => {
-        return `${encodeURIComponent(k)}=${encodeURIComponent(form[k])}`
-    }).join('&')
+    const payload = objectToFormPayload(form)
     const r = client.request({
         method: HttpMethod.POST,
         host: 'cp.zoneedit.com',
@@ -170,6 +177,90 @@ function performLogin(client, form, callback) {
     r.end()
 }
 
+function getTwoFactorForm(client, callback) {
+        const r = client.request({
+        method: HttpMethod.GET,
+        host: 'cp.zoneedit.com',
+        path: '/tfa.php'
+    }, response => {
+        let body = ""
+
+        response.on('data', d => {
+            body += d.toString()
+        })
+
+        response.on('end', () => {
+            if (200 !== response.statusCode) {
+                console.warn(`${response.statusCode} ${response.statusMessage}`)
+                return callback(new Error('Failed to get two factor code form'))
+            }
+            const form = {}
+            const document = parseHtml(body)
+            const formElements = [ 'csrf_token' ]
+            formElements.forEach(n => {
+                const value = document
+                    .querySelector(`form input[name="${n}"]`)
+                    .getAttribute('value')
+                form[n] = value
+            })
+            callback(null, form)
+        })
+    })
+
+    r.on('error', err => callback(err))
+    r.end()
+}
+
+function performTwoFactorAuth(client, form, callback) {
+    const payload = objectToFormPayload(form)
+    const r = client.request({
+        method: HttpMethod.POST,
+        host: 'cp.zoneedit.com',
+        path: '/tfa.php',
+        headers: {
+            [HttpHeader.Accept]: ContentType.Wildcard,
+            [HttpHeader.ContentLength]: Buffer.byteLength(payload),
+            [HttpHeader.ContentType]: ContentType.WwwForm
+        }
+    }, response => {
+        if (200 !== response.statusCode && 302 !== response.statusCode) {
+            console.warn(`${response.statusCode} ${response.statusMessage}`)
+            return callback(new Error('Second factor did not succeed'))
+        }
+        let body = ""
+
+        response.on('data', d => {
+            body += d.toString()
+        })
+
+        response.on('end', () => {
+            callback(null, client)
+        })
+    })
+
+    r.on('error', err => callback(err))
+    r.write(payload)
+    r.end()
+}
+
+function twoFactorAuth(client, callback) {
+    getTwoFactorForm(client, (err, form) => {
+        if (err) {
+            return callback(err)
+        }
+        try {
+            form.mode = 'token'
+            form['auto-submit'] = '1'
+            form.token = state.token
+            form.forceReload = '0'
+            performTwoFactorAuth(client, form, callback)
+        }
+        catch (error) {
+            callback(new Error('Failed handling two factor form', { cause: error }))
+        }
+    })
+}
+
 function login(client, callback) {
     getLoginForm(client, (err, form) => {
         if (err) {
@@ -183,12 +274,108 @@ function login(client, callback) {
                 md5(form.login_pass),
                 form.login_chal
             ].join(""))
-            performLogin(client, form, callback)
+            performLogin(client, form, (err, client) => {
+                if (err) {
+                    return callback(new Error('Failed performing login', { cause: err }))
+                }
+                twoFactorAuth(client, callback)
+            })
         }
         catch (error) {
+            console.warn(error.stack)
             callback(new Error('Failed handling login form', { cause: error }))
         }
     })
+}
+
+const cookieCache = '/tmp/getssl-dns-zoneedit-cookie-cache'
+const cacheMaxAgeMinutes = 30
+
+function loginAndSaveCookies(client, callback) {
+    try {
+        login(client, (err, client) => {
+            if (err) {
+                return callback(err)
+            }
+            const writeOptions = {
+                encoding: 'utf8',
+                flag: 'w'
+            }
+            writeFile(cookieCache, JSON.stringify(client.cookiesToJson()), writeOptions, err => {
+                if (err) {
+                    return callback(err)
+                }
+                callback(null, client)
+            })
+        })
+    }
+    catch (error) {
+        callback(error)
+    }
+}
+
+function cacheIsOk(callback) {
+    try {
+        stat(cookieCache, (err, stats) => {
+            if (err) {
+                return callback(err)
+            }
+            const threshold = new Date()
+            threshold.setMinutes(threshold.getMinutes() - cacheMaxAgeMinutes)
+            callback(null, stats.ctime > threshold)
+        })
+    }
+    catch (error) {
+        callback(error)
+    }
+}
+
+function prepareClient(client, callback) {
+    try {
+        open(cookieCache, 'r', (err, fd) => {
+            if (err && 'ENOENT' === err.code) {
+                loginAndSaveCookies(client, callback)
+            }
+            else if (err) {
+                callback(err)
+            }
+            else {
+                cacheIsOk((err, cacheOk) => {
+                    if (err) {
+                        return callback(err)
+                    }
+                    if (cacheOk) {
+                        const readOptions = {
+                            encoding: 'utf8'
+                        }
+                        readFile(fd, readOptions, (err, data) => {
+                            if (err) {
+                                return callback(err)
+                            }
+                            client.cookiesFromJson(JSON.parse(data))
+                            close(fd, err => {
+                                if (err) {
+                                    return callback(new Error('Failed to close cache', { cause: err }))
+                                }
+                                callback(null, client)
+                            })
+                        })
+                    }
+                    else {
+                        close(fd, err => {
+                            if (err) {
+                                return callback(new Error('Failed to close cache', { cause: err }))
+                            }
+                            loginAndSaveCookies(client, callback)
+                        })
+                    }
+                })
+            }
+        })
+    }
+    catch (error) {
+        callback(new Error('Failed to read cookie cache', { cause: error }))
+    }
 }
 
 function loginToDomain(client, callback) {
@@ -322,9 +509,7 @@ function delTxtRecord(form) {
 }
 
 function confirmRecordsTxt(client, form, callback) {
-    const payload = Object.keys(form).map(k => {
-        return `${encodeURIComponent(k)}=${encodeURIComponent(form[k])}`
-    }).join('&')
+    const payload = objectToFormPayload(form)
     const r = client.request({
         method: HttpMethod.POST,
         host: 'cp.zoneedit.com',
@@ -360,9 +545,7 @@ function confirmRecordsTxt(client, form, callback) {
 function updateRecordsTxt(client, form, transform, callback) {
     transform(form)
 
-    const payload = Object.keys(form).map(k => {
-        return `${encodeURIComponent(k)}=${encodeURIComponent(form[k])}`
-    }).join('&')
+    const payload = objectToFormPayload(form)
     const r = client.request({
         method: HttpMethod.POST,
         host: 'cp.zoneedit.com',
@@ -455,7 +638,7 @@ console.log(`Working with domain: ${state.domain}`)
 console.log(`TXT record value: ${state.txtValue}`)
 
 const client = new HttpClient()
-promisify(login)(client)
+promisify(prepareClient)(client)
     .then(_ => {
         return promisify(loginToDomain)(client)
     })

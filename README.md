@@ -1,5 +1,14 @@
 # getssl-dns-zoneedit
 
+> ## ZoneEdit has implemented two-factor authentication!
+>
+> As a result, this tooling is much less useful.  It supports adding a
+> temporary authenticator token, but this will result in it only working
+> within a very short window (not really applicable for unattended
+> operation).
+>
+> YMMV
+
 The [getssl](https://github.com/srvrco/getssl) script is a very solid way to
 obtain and update [Let's Encrypt](https://letsencrypt.org/) certificates. When
 using wildcard SSL certificates, they authorize distribution of a certificate
@@ -33,4 +42,5 @@ DNS_ADD_COMMAND="/path/to/getssl-dns-zoneedit/index.js add"
 DNS_DEL_COMMAND="/path/to/getssl-dns-zoneedit/index.js del"
 export ZONEEDIT_USER="your username"
 export ZONEEDIT_PASS="your password"
+export ZONEEDIT_TOKEN="your second factor token"
 ```
